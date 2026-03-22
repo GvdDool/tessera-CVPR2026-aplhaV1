@@ -58,8 +58,25 @@ The animation reveals an immediate and interpretable structure. The river runnin
 No classifier was applied. No labels were used. The structure in the image emerges entirely from the learned embeddings — which is precisely the point.
 
 ![TESSERA Representation](TESSERA_Soubre_Test_Tile_2020_2025_pca.gif)
+**Figure 1. PCA-reduced TESSERA embeddings for the Soubre test tile (2020–2025). PCA was fitted once across all six years to ensure a consistent colour reference frame. No classifier or labels were applied.**
 
 The challenge of **scale** persists; however, this modular architecture will enable the creation of deep, systematic views and contribute to a better year-over-year understanding of our changing planet.
+
+The acquisition table below illustrates this directly. For this test area — deliberately chosen in a region with persistent cloud cover — only 2023 has enough cloud-free Sentinel-2 scenes to meet the minimum threshold for meaningful embeddings. In most years, clear acquisitions cluster in the dry season, meaning that year-over-year comparisons carry an inherent seasonal bias that cannot be resolved without denser temporal coverage.
+
+**Table 1. Cloud-filtered Sentinel-2 acquisition dates for the Soubre test tile (max. 20% cloud cover, 2020–2025)**
+|  Year | Count | Acquisition Dates |
+|------|-------|-------------------|
+| 2020 | 4 | 2020-01-03, 2020-01-13, 2020-02-07, 2020-05-02 |
+| 2021 | 2 | 2021-02-06, 2021-12-23 |
+| 2022 | 4 | 2022-01-22, 2022-03-03, 2022-12-18, 2022-12-28 |
+| 2023 | 7 | 2023-01-02, 2023-01-07, 2023-04-02, 2023-05-07, 2023-12-13, 2023-12-18, 2023-12-23 |
+| 2024 | 3 | 2024-01-27, 2024-02-06, 2024-03-27 |
+| 2025 | 2 | 2025-01-26, 2025-03-27 |
+
+The threshold for cloud presence in a scene is set to 20%. For traditional machine learning tasks, this is already considered high, but the TESSERA documentation suggests accepting up to 90–100% cloud cover, relying on pixel-level SCL masking to filter out individual cloudy pixels within each scene. In principle, relaxing the threshold would increase temporal coverage and reduce seasonal sampling bias. However, in West Africa, cloud cover during the rainy season is not just dense but persistent — accompanied by shade, haze, and atmospheric scattering that degrade surface reflectance even in nominally cloud-free pixels. In this context, lowering the threshold may increase scene count without meaningfully improving embedding quality, and the conservative 20% filter is retained as the safer default.
+
+
 
 ## Outlook
 
