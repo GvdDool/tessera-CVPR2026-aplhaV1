@@ -1,103 +1,163 @@
-# From Pixels to Embeddings: Scaling Satellite AI with a Master-Worker Architecture
+# Project Title: TESSERA Framework Customisation
 
-By Gijs van den Dool — LinkedIn | GitHub
+**By Gijs van den Dool — [LinkedIn](https://www.google.com/search?q=https://www.linkedin.com/in/gvdool/) | [GitHub](https://github.com/GvdDool)**
 
-Satellite imagery has been used to map the world since the launch of Landsat 1 in 1972. However, simply assigning each pixel a single label is no longer sufficient. Foundation models like TESSERA offer a new approach. Instead of assigning a fixed class to each pixel, they create detailed 128-dimensional embeddings that capture the full spectral-temporal signature of each location.
+Satellite imagery has enabled global mapping since the launch of Landsat 1 in 1972. But assigning each pixel just one label is no longer sufficient for many applications. Foundation models like TESSERA work differently: instead of fixed classes, they create detailed 128-dimensional embeddings that capture the full spectral and temporal signature of each place.
 
-While foundation models can be trained on many different datasets—such as the Landsat time series for multi-decadal observation—modern systems like TESSERA leverage both Sentinel-1 SAR and Sentinel-2 optical imagery. This multi-modal combination provides higher spatial resolution, more frequent revisits, and cloud-free coverage, significantly improving the quality of embeddings in difficult environments.
+Foundation models can learn from many types of data, including Landsat time series spanning several decades. Modern systems like TESSERA use both Sentinel-1 SAR and Sentinel-2 optical images. Combining these sources provides better spatial detail, more frequent updates, and cloud-free images, all of which help improve embedding quality in tough conditions.
 
-Turning these rich, multi-source datasets into consistent, high-quality embeddings across large regions is a game-changer: these embeddings can power many downstream tasks—such as land-cover analysis, change detection, and agricultural monitoring—with minimal fine-tuning and without retraining the core model.
+Turning these rich, multi-source datasets into consistent, high-quality embeddings across large areas enables many applications, such as land-cover analysis, change detection, and crop monitoring. These tasks need little fine-tuning and do not require retraining the main model.
 
-The challenge is getting there at scale.
+The main challenge is making this work at scale.
+**GitHub Repository for this work:** Colab Notebooks and ReadMe
+
+-----
 
 ## Customising TESSERA's framework
 
-TESSERA is an open-source foundation model developed at the University of Cambridge (github.com/ucam-eo/tessera). The team has done an exceptional job documenting and structuring the repository: the codebase is clean, preprocessing scripts are well-parameterised, and the inference pipeline is logically separated from data preparation.
+TESSERA is an open-source foundation model developed at the University of Cambridge ([github.com/ucam-eo/tessera](https://github.com/ucam-eo/tessera)). The repository is well-documented and structured: the codebase is organised, preprocessing scripts are parameterised, and the inference pipeline is logically separated from data preparation.
 
-The real challenge isn't the code—it’s the compute context. Without a dedicated HPC environment, running the full pipeline in a single pass can quickly exhaust memory and storage when processing multi-year satellite stacks. While the Cambridge team is working to provide these embeddings as a 'global carpet' (Model-as-Data), the sheer volume of petabytes means planetary-scale rollouts take time.
+The main challenge is not the code, but the computing resources. Without a dedicated high-performance computing (HPC) setup, running the full pipeline at once can quickly exhaust available memory and storage when working with years of satellite data. The Cambridge team is building global-scale embeddings as a 'global carpet' (Model-as-Data), but the huge amount of data, measured in petabytes, means rolling this out worldwide takes a long time.
 
-My solution was to stage the pipeline into discrete, self-contained functions called within a double loop over areas and years. This transforms a potentially fragile monolithic script into a controllable, resumable process: if a single year or tile fails, only that combination needs to be rerun.
+To address this and mitigate the waiting time, I structured the pipeline as a set of discrete, self-contained functions, each invoked within a double loop over areas and years. This approach transforms a potentially fragile monolithic script into a controllable, resumable process: if a single year or tile fails, only that specific combination needs to be rerun.
 
-To orchestrate this, I built a Master-Worker architecture within Google Colab. The 'Master' notebook owns configuration and orchestration, defining the areas, years, and processing schedule. The Worker notebook is a library of modular functions that are executed in the same Google Colab kernel, so all state is shared without file I/O across notebooks.
+To manage this process, I implemented a Master-Worker architecture within Google Colab. The 'Master' notebook handles the setup and processing schedule, while the 'Worker' is a collection of modular functions. Executing both within a shared kernel enables seamless state management and allows scaling analysis without the overhead of frequent file I/O.
+
+-----
 
 ## The Pipeline: Fifteen Steps
 
-The pipeline divides into two phases: seven configuration steps that run once per session, and eight processing steps that execute inside the double loop for every area-year combination.
+The pipeline divides into two phases: seven configuration steps that run once per session and eight processing steps that execute within a double loop for every area-year combination.
 
-### Phase 1: Configuration (Steps 1–7)
-Phase 1 establishes a fully reproducible execution environment by connecting to persistent storage, retrieving the required codebase, installing dependencies, and standardising paths and permissions. The model is also prepared for efficient inference by localising checkpoints and applying targeted patches. These steps ensure that all subsequent processing runs reliably within the Colab runtime.
+### Phase 1: Configuration (Steps 1 to 7)
 
-* **Step 1: Preparing the Google Colab environment.** This step connects the Colab runtime to persistent storage, where the repository, checkpoints, and final outputs are stored. Google Colab Pro with an L4 GPU and high-RAM runtime is used to align with the requirements specified by the TESSERA team.
-* **Step 2: Clone the TESSERA repository.** The specified branch is pulled from GitHub into the Drive-mounted directory, making preprocessing and inference scripts available to the pipeline. If the repository is already present, the active branch is verified, and the clone step is skipped.
-* **Step 3: Install dependencies.** All required Python packages, including rasterio, xarray, stackstac, pyproj, pystac-client, planetary-computer, and others, are installed into the Colab environment. This step is separated from the import step to ensure that packages are present before any module-level imports are attempted.
-* **Step 4: Configure project paths.** All working directories, including data, temporary scratch space, checkpoints, and output, are resolved into a single configuration object that is passed through the pipeline. Local scratch space (/content/) is used for intermediate input and output, while only final outputs are written back to Google Drive. The additional personal storage capacity is a key reason for selecting the Colab and Google Drive configuration.
-* **Step 5: Localise the model checkpoint.** The most recent TESSERA model weights (approximately 7.5 GB) are collected and stored on a personal Google Drive. The selected checkpoint is then copied to local runtime storage. This approach avoids path issues caused by spaces in filenames, ensures the pipeline uses the latest or appropriate model, and accelerates checkpoint loading during inference.
-* **Step 6: Patch preprocessing scripts.** Two targeted patches were applied to the TESSERA repository. The first updates the inference launch script to use the correct Python executable path for the current Colab environment. The second adds cloud class 10 (thin cirrus) to the Sentinel-2 invalid-pixel mask. Thin cirrus clouds (SCL class 10) are semi-transparent but are often masked in optical processing because they can distort surface reflectance and derived indices. In regions such as West Africa, where cloud cover is common, removing these pixels improves composite and analysis quality but reduces temporal coverage in scenes with less than 20% overall cloud cover.
-* **Step 7: Set file permissions.** The Rust-compiled stacking binaries and shell scripts are marked as executable. This step is required for every new Colab session because the Drive-mounted filesystem does not preserve Unix permissions across sessions.
+Sets up a reproducible environment by connecting to storage, getting the needed code, installing dependencies, and standardising paths and permissions. The model is also prepared for fast inference by moving checkpoints locally and applying targeted patches. These steps ensure that all subsequent processing runs reliably within the Colab runtime.
 
-### Phase 2: Main Processing Loop (Steps 8–15)
-Phase 2 runs for each area and year, combining optical and radar data to create georeferenced embeddings for analysis. The steps include making a region of interest, downloading Sentinel-1 and Sentinel-2 images, stacking and patching the data, running model inference, and exporting the results. Storage is managed efficiently in local scratch space. This method keeps processing consistent and repeatable across different locations and times. All functions match scripts found in the GitHub repository.
+  * **Step 1: Preparing the Google Colab environment.** This step connects the Colab runtime to persistent storage, where the repository, checkpoints, and final outputs are stored. Google Colab Pro with an L4 GPU and high-RAM runtime is used to align with the requirements specified by the TESSERA team (the Dask data manipulation tasks (and workers) need the additional compute [Disclaimer: I didn't test the methods on the Google Free Tier.]
+  * **Step 2: Clone the TESSERA repository.** The specified branch is pulled from GitHub into the Drive-mounted directory, making preprocessing and inference scripts available to the pipeline. If the repository is already present, the active branch is verified, and the clone step is skipped.
+  * **Step 3: Install dependencies.** All required Python packages, including rasterio, xarray, stackstac, pyproj, pystac-client, planetary-computer, and others, are installed into the Colab environment. This step is separate from the import step to ensure packages are available before any module-level imports are attempted.
+  * **Step 4: Configure project paths.** All working directories, including data, temporary files, checkpoints, and output, are resolved into a single configuration object that is passed through the pipeline. Local scratch space (/content/) is used for intermediate input and output, while only final outputs are written back to Google Drive. Having extra personal storage is a main reason for choosing Colab and Google Drive.
+  * **Step 5: Localise the model checkpoint.** The latest TESSERA model weights (about 7.5 GB) are saved on a personal Google Drive. The chosen checkpoint is then copied to the local runtime. This avoids file path issues, ensures the pipeline uses the correct model, and speeds up inference loading.
+  * **Step 6: Update preprocessing scripts.** Two specific fixes were made to the TESSERA code. The first change is to update the inference script to use the correct Python path for Colab. The second adds cloud class 10 (thin cirrus) to the Sentinel-2 invalid-pixel mask. Thin cirrus clouds (SCL class 10) are partly see-through but are often masked in optical processing because they can affect surface reflectance and related measurements. In places like West Africa, where clouds are common, removing these pixels improves the quality of composites and analysis, but it also means fewer scenes are usable when cloud cover is below 20%.
+  * **Step 7: Set file permissions.** The Rust-compiled stacking binaries and shell scripts are marked as executable. This step is required for every new Colab session because the Drive-mounted filesystem does not preserve Unix permissions across sessions.
 
-* **Step 8: Generate Region of Interest (ROI).** The central coordinates and tile size for each area are converted into a georeferenced single-band GeoTIFF using the correct UTM projection. This ROI sets the boundaries for all later spatial steps and the final output. To keep memory use reasonable and processing stable, a 5×5 km area (500×500 cells, like the TESSERA chip) is used by default. This usually takes about 8 minutes in the chosen Colab environment.
-* **Step 9: Download Sentinel-2.** The Microsoft Planetary Computer STAC catalogue is searched for Sentinel-2 (S2) images with low cloud cover for the ROI and year. The images are saved directly to the local scratch space. By default, only scenes with up to 20% cloud cover are included, which helps avoid very cloudy images in overcast areas. While TESSERA can handle some clouds, using mostly clear images helps each patch produce high-quality embeddings, especially in cloudy regions.
-* **Step 10: Download Sentinel-1.** The same catalogue is used to get SAR backscatter data from the Microsoft Planetary Computer Sentinel-1-rtc collection. Sentinel-1 (S1) images are not affected by clouds, so they are a useful addition to optical images in tough weather. The SAR images from MPC are already terrain-corrected, so topographic effects are handled during preprocessing. Both ascending and descending orbits are requested, but for this area, only ascending images are available. This may slightly affect data quality due to viewing angles and terrain, but about 30 images per year still provide a strong basis for analysis.
-* **Step 11: Stack.** The TESSERA Rust-compiled stackers for S1 and S2 are executed in parallel, consolidating the downloaded GeoTIFFs into numpy arrays organised by band, date, and orbit state. The resulting stacked arrays are stored entirely in local scratch space.
-* **Step 12: Retile.** The stacked arrays are divided into 40×40 pixel patches for inference. A 5 km tile at 10 m resolution yields 169 patches. The retiler also generates a small ROI mask for each patch, which is subsequently used to address edge cases at tile boundaries.
-* **Step 13: Inference.** The TESSERA model is applied to all patches using the localised checkpoint. This step is computationally intensive and requires a GPU runtime (L4 or A100). Processing 169 patches typically takes 6 to 10 minutes. Each patch produces a 40×40×128 embedding array.
-* **Step 14: Stitch and export.** The 169 patch embeddings are combined into one 500×500×128 spatial array, georeferenced to the original ROI. This array is saved as a GeoTIFF in the area's output folder on Drive. The 128 MB file works with standard GIS tools and can be used by any downstream classifier.
-* **Step 15: Cleanup.** All temporary files, such as downloads, stacks, patches, and representations, are deleted from local scratch space to free up storage before starting the next area and year. The final outputs on Drive are not affected.
+### Phase 2: Main Processing Loop (Steps 8 to 15)
+
+Runs for each area and year, combining optical and radar data to make georeferenced embeddings for analysis. The steps include defining a region of interest, downloading Sentinel-1 and Sentinel-2 images, stacking and patching the data, running the model, and exporting the results. Storage is managed efficiently in local scratch space. This approach keeps processing consistent and repeatable across locations and times. All functions match the scripts in the GitHub repository.
+
+  * **Step 8: Generate Region of Interest (ROI).** The central coordinates and tile size for each area are converted into a georeferenced single-band GeoTIFF using the correct UTM projection. This ROI sets the boundaries for all later spatial steps and the final output. To keep memory use reasonable and processing stable, a 5×5 km area (500×500 cells, like the TESSERA chip) is used by default. This usually takes about 8 minutes in the chosen Colab environment.
+  * **Step 9: Download Sentinel-2.** The Microsoft Planetary Computer STAC catalogue is searched for Sentinel-2 (S2) images with low cloud cover for the ROI and year. The images are saved directly to the local scratch space. By default, only scenes with up to 20% cloud cover are included, which helps avoid very cloudy images in overcast areas. While TESSERA can handle some clouds, using mostly clear images helps each patch produce high-quality embeddings, especially in cloudy regions.
+  * **Step 10: Download Sentinel-1.** The same catalogue is used to get SAR backscatter data from the Microsoft Planetary Computer Sentinel-1-rtc collection. Sentinel-1 (S1) images are not affected by clouds, so they are a useful addition to optical images in tough weather. The SAR images from MPC are already terrain-corrected, so topographic effects are handled during preprocessing. Both ascending and descending orbits are requested, but only ascending images are available for this area. This may slightly affect data quality due to viewing angles and terrain, but about 30 images per year still provide a strong basis for analysis.
+  * **Step 11: Stack.** The TESSERA Rust-compiled stackers for S1 and S2 are executed in parallel, consolidating the downloaded GeoTIFFs into numpy arrays organised by band, date, and orbit state. The resulting stacked arrays are stored entirely in local scratch space.
+  * **Step 12: Retile.** The stacked arrays are divided into 40×40 pixel patches for inference. A 5 km tile at 10 m resolution yields 169 patches. The retiler also generates a small ROI mask for each patch, which is subsequently used to address edge cases at tile boundaries.
+  * **Step 13: Inference.** The TESSERA model is applied to all patches using the localised checkpoint. This step is computationally intensive and requires a GPU runtime (L4 or A100). Processing 169 patches typically takes 6 to 10 minutes. Each patch produces a 40×40×128 embedding array.
+  * **Step 14: Stitch and export.** The 169 patch embeddings are combined into one 500×500×128 spatial array, georeferenced to the original ROI. This array is saved as a GeoTIFF in the area's output folder on Drive. The 128 MB file works with standard GIS tools and can be used by any downstream classifier.
+  * **Step 15: Cleanup.** All temporary files, such as downloads, stacks, patches, and representations, are deleted from local scratch space to free up storage before starting the next area and year. The final outputs on Drive are not affected.
+
+-----
 
 ## Results: Six Years of Embeddings Over a Single Area
 
-To validate the pipeline, embeddings were generated for the same 5×5 km area across six consecutive years (2020–2025). Each year produces a 500×500×128 GeoTIFF — where every pixel encodes the full spectral-temporal signature of that location across a year of Sentinel-1 and Sentinel-2 acquisitions.
+To validate the pipeline, I generated embeddings for a consistent 5×5 km ROI across six consecutive years (2020–2025). Each year produces a 500×500×128 GeoTIFF — where every pixel encodes the full spectral-temporal signature of that location across a year of Sentinel-1 and Sentinel-2 acquisitions.
 
-To visualise the 128-dimensional output, PCA was fitted once across all years combined and used to reduce each year to three components, mapped to RGB. Fitting PCA globally ensures that colours are comparable across years — a shift in hue reflects a genuine change in the landscape, not a statistical artefact.
+To visualise this high-dimensional latent space, Principal Component Analysis (PCA) was fitted once across the combined six-year dataset and used to reduce each year to three primary components, mapped to RGB channels. By fitting the PCA globally, we ensure that colours are comparable across the entire time series: a shift in hue reflects a genuine change in the landscape rather than a statistical artefact.
 
-The animation reveals an immediate and interpretable structure. The river running through the western edge of the tile appears as a stable deep blue across all six years — water has a consistent spectral-temporal signature that the model encodes reliably without any supervision. The urban area to the east shifts colour noticeably between years, reflecting real changes in the built environment and surrounding land use. The agricultural mosaic shows fine texture distinguishing crop types, fallow cycles, and agroforestry patterns.
+The resulting animation reveals an immediate and interpretable structure:
 
-No classifier was applied. No labels were used. The structure in the image emerges entirely from the learned embeddings — which is precisely the point.
+  * **Stable features:** The river running through the western edge appears as a consistent deep blue across all six years—a stable spectral-temporal signature that the model encodes reliably without any supervision.
+  * **Dynamic shifts:** The urban area to the east shifts in colour noticeably over time, reflecting (real) changes in the built environment and surrounding land use.
+  * **Fine texture:** The agricultural areas show differences between crop types, fallow periods, and agroforestry patterns in impressive detail.
 
-![TESSERA Representation](TESSERA_Soubre_Test_Tile_2020_2025_pca.gif)
-**Figure 1. PCA-reduced TESSERA embeddings for the Soubre test tile (2020–2025). PCA was fitted once across all six years to ensure a consistent colour reference frame. No classifier or labels were applied.**
+No classifier or labels were used. The patterns in these images are entirely derived from the learned embeddings, providing a sensitive, unsupervised way to track changes in the landscape.
 
-The challenge of **scale** persists; however, this modular architecture will enable the creation of deep, systematic views and contribute to a better year-over-year understanding of our changing planet.
+PCA was fitted once across all six years to ensure a consistent colour reference frame. No classifier or labels were applied.
 
-The acquisition table below illustrates this directly. For this test area — deliberately chosen in a region with persistent cloud cover — only 2023 has enough cloud-free Sentinel-2 scenes to meet the minimum threshold for meaningful embeddings. In most years, clear acquisitions cluster in the dry season, meaning that year-over-year comparisons carry an inherent seasonal bias that cannot be resolved without denser temporal coverage.
+**Note:** The Colab Notebook to run the tests is stored in the GitHub repository: `V4_TESSERA_Master.ipynb`, which links to `V4_TESSERA_Worker.ipynb` (both files are required to reproduce the work).
+
+-----
+
+## Refinement
+
+Scaling is still a challenge, but this modular setup makes it easier to develop broad, systematic views and improves our understanding of year-over-year changes.
+
+The table below illustrates this directly. For this test area, deliberately chosen in a region with persistent cloud cover, only 2023 has enough cloud-free Sentinel-2 scenes to meet the minimum threshold for meaningful embeddings. In most years, clear acquisitions cluster in the dry season, meaning that year-over-year comparisons carry an inherent seasonal bias that cannot be resolved without denser temporal coverage.
 
 **Table 1. Cloud-filtered Sentinel-2 acquisition dates for the Soubre test tile (max. 20% cloud cover, 2020–2025)**
-|  Year | Count | Acquisition Dates |
-|------|-------|-------------------|
-| 2020 | 4 | 2020-01-03, 2020-01-13, 2020-02-07, 2020-05-02 |
-| 2021 | 2 | 2021-02-06, 2021-12-23 |
-| 2022 | 4 | 2022-01-22, 2022-03-03, 2022-12-18, 2022-12-28 |
-| 2023 | 7 | 2023-01-02, 2023-01-07, 2023-04-02, 2023-05-07, 2023-12-13, 2023-12-18, 2023-12-23 |
-| 2024 | 3 | 2024-01-27, 2024-02-06, 2024-03-27 |
-| 2025 | 2 | 2025-01-26, 2025-03-27 |
 
-The threshold for cloud presence in a scene is set to 20%. For traditional machine learning tasks, this is already considered high, but the TESSERA documentation suggests accepting up to 90–100% cloud cover, relying on pixel-level SCL masking to filter out individual cloudy pixels within each scene. In principle, relaxing the threshold would increase temporal coverage and reduce seasonal sampling bias. However, in West Africa, cloud cover during the rainy season is not just dense but persistent — accompanied by shade, haze, and atmospheric scattering that degrade surface reflectance even in nominally cloud-free pixels. In this context, lowering the threshold may increase scene count without meaningfully improving embedding quality, and the conservative 20% filter is retained as the safer default.
+The threshold for cloud presence in a scene is set to 20%. For traditional machine learning tasks, this is already considered high, but the TESSERA documentation suggests accepting up to 90–100% cloud cover, relying on pixel-level SCL masking to filter out individual cloudy pixels within each scene. In principle, relaxing the threshold would increase temporal coverage and reduce seasonal sampling bias.
 
+However, in West Africa, cloud cover during the rainy season is not only dense but also persistent, accompanied by shading, haze, and atmospheric scattering that degrade surface reflectance even in nominally cloud-free pixels. In this context, lowering the threshold may increase scene count without meaningfully improving embedding quality, so perhaps a conservative 20% filter could be the safer default.
 
+Using a strict tile-based filter has a clear effect, as shown in Figure 1. Not all years are equally represented, so there are big differences between years. Only 2023 had enough cloud-free images (about 10% of all passes) to make strong embeddings. In other years, the few images from the dry season create a built-in seasonal bias.
+
+**Table 2. Minimum cloud cover threshold required to reach sufficient scene count per year (bold = first threshold meeting ≥7 scenes), Soubre test tile 2020–2025.**
+
+To understand whether relaxing the cloud threshold could improve temporal coverage without degrading embedding quality, a systematic experiment was conducted across 16 thresholds from 15% to 90%. This is the scene-level filter; it reflects cloud cover across the full 110×110 km Sentinel-2 tile, not just the 5×5 km ROI. The processor applies a secondary ROI-level filter, rejecting chips where more than 5% of pixels are flagged as invalid by the Scene Classification Layer (SCL). For scenes with low cloud cover, all chips pass, but as scene-level cloud tolerance increases, more chips are rejected at the internal SCL stage. For 2023, at 90% tolerance, 53 scenes were prepared from 73 available observations, with 11 chips rejected by the internal check.
+
+**Figure 2. Sentinel-2 scene selection frequency by date, Soubre test tile 2023, across 16 cloud cover thresholds (15%–90%).** Bar height indicates how many thresholds are included in each date. Blue = successfully downloaded; red = rejected by internal SCL check.
+
+-----
+
+## Cloud Threshold Experiment
+
+Full embeddings were generated at each of the 16 thresholds using an incremental per-date download approach. In the Colab environment, Dask task scheduling is unstable under high memory pressure, leading to premature task terminations that cascade across subsequent dates. To mitigate this, each date was processed in an isolated subprocess with a fresh Dask cluster, avoiding the cascade failures that occurred when processing full-year ranges with high cloud tolerances.
+
+The resulting embeddings were compared using three complementary analyses.
+
+1.  **Consecutive threshold delta curve.** Mean absolute difference and cosine similarity were calculated between each pair of consecutive thresholds: t15 to t20, t20 to t25, and so on (t05, t10 are excluded because they have the same scene selection as t15, and t95 and t100 are removed as the internal check would reject most of the chips with this much cloud cover). The delta curve shows a large jump from t15 to t20 (cosine similarity increases from 0.942 to 0.984), then remains flat from t25 onward at around 0.989. The Mean Absolute Difference follows a similar pattern but is mirrored, dropping from 2.3167 (t15) to 0.9949 (t20), with the absolute minimum at t025 when going to t030 (0.6651). Adding more scenes this year does not improve results; the key point for this ROI is at t20 (with 7 scenes).
+
+**Figure 3. Embedding change between consecutive cloud cover thresholds, Soubre test tile 2023.** Top: mean absolute difference. Bottom: mean cosine similarity. The elbow at t15 to t20 is the only significant transition.
+
+2.  **Pairwise cosine similarity matrix.** Comparing all 16 threshold pairs shows three clear embedding groups: t20 to t40 (dry season only), t45 to t65 (dry season plus shoulder season), and t70 to t90 (full year, including rainy season). Inside each group, embeddings are very similar (\>0.982). Between-group similarity drops to 0.960-0.975, which is meaningful but not large. t15 stands apart from all other thresholds because it has only 4 scenes, which also explains the large differences in animation across years, with few images (2021, 2024, 2025). Even though these years were not tested, they are likely to show the same level of isolation as the 2023-t15 selection.
+
+**Figure 4. Pairwise cosine similarity matrix across 16 cloud cover thresholds.** Three distinct embedding clusters are visible, separated at approximately t45 and t70.
+
+3.  **PCA variance explained per threshold.** PCA was fitted once across all 16 threshold embeddings combined, then applied to each threshold individually to measure variance explained by the first three principal components. Variance jumps from 11.5% at t15 to approximately 15% at t20, then flattens almost completely through t90 (16.6%). Only 1.6 percentage points of additional variance are gained across 14 threshold steps beyond t20.
+
+**Figure 5. PCA variance explained per threshold, Soubre test tile 2023.** Variance flattens at t20, confirming that no significant structural improvement occurs beyond that point.
+
+**Note:** The Colab Notebook to run the tests is stored in the GitHub repository: `LinkedInFigures.ipynb`
+
+-----
+
+## Operational Recommendation
+
+The three analyses converge on the same conclusion: for this ROI, 7 scenes at 20% cloud cover capture approximately 90% of the embedding structure achievable with 42 scenes at 90% cloud cover. However, as the acquisition table shows, most years do not reach 7 scenes at 20%. The following reproducible workflow was developed to determine the operational threshold for any ROI:
+
+1.  **Find the best year** — the year reaching sufficient scene count at the strictest threshold. For this ROI: 2023, reaching 7 scenes at 20%.
+2.  **Run the cloud threshold experiment on the best year** — generate embeddings across all thresholds, compute the delta curve and PCA variance, and identify the elbow point. For this ROI: elbow at t20, 7 scenes.
+3.  **Determine the ROI-specific minimum viable scene count** — the scene count at the elbow point. For this ROI: 7 scenes.
+4.  **Apply to all other years** — find the minimum threshold needed per year to reach the minimum scene count. For this ROI, all years reach 7+ scenes at 30% cloud cover.
+5.  **Select the operational threshold** — the lowest threshold at which all years meet the minimum, with comfortable headroom. For this ROI: 35%, giving ≥10 scenes per year across all six years.
+
+At 35%, processing time drops significantly compared to running at 90%, about 10 scenes per year instead of 42, while still remaining within the stable t20 to t40 embedding group.
+
+-----
+
+## Visual Confirmation
+
+In 2024, only 3 scenes are found in the ROI at 20% cloud cover, which is insufficient to capture the landscape's optical components, with sensor artefacts dominating the embedding. This is not an isolated case; 2025 at 20% yields only 2 scenes, and the degradation is visible across the entire top row of Figure 6: as scene count drops from 7 (2023) to 3 (2024) to 2 (2025), spatial structure progressively breaks down within the same shared colour space.
+
+The bottom row tells a different story: at 35% cloud cover, 2024 gains 8 scenes and 2025 gains 9 scenes, all three years show consistent spatial structure and comparable colour signatures, with field boundaries, road networks, and vegetation patterns clearly resolved. The choice of threshold does not just affect the scene count; it determines whether the embedding is structurally comparable across years at all.
+
+**Figure 6. TESSERA embeddings for 2023, 2024, and 2025 at t020 (top row) and t035 (bottom row)**, projected into a shared PCA colour space fitted across all six images. Within t020, spatial structure degrades as scene count drops from 7 (2023) to 3 (2024) to 2 (2025). Within t035, all three years show consistent structure and comparable colour signatures despite different scene counts. Same area, same model, same colour space.
+
+-----
 
 ## Outlook
 
 My primary objective is to use these notebooks to build a regional embedding archive spanning various areas and years. While the official global TESSERA outputs are being produced and validated by the Cambridge team, this 'on-demand' approach allows projects to train downstream Earth observation models early — without the need for high-performance computing (HPC) or waiting for global rollouts.
 
 The architecture is designed for easy expansion:
-* **Scalability:** Adding a new study area is as simple as changing a single coordinate setting.
-* **Flexibility:** Every step—from cloud-cover thresholds to SAR orbit selection—can be adjusted independently.
-* **Throughput:** The double-loop structure supports parallel execution across multiple Colab sessions for users processing entire countries.
 
-By staging the pipeline this way, we move from 'experimental scripts' to a production-ready data factory.
+  * **Scalability:** Adding a new study area is as simple as changing a single coordinate setting.
+  * **Flexibility:** Every step—from cloud-cover thresholds to SAR orbit selection—can be adjusted independently.
+  * **Throughput:** The double-loop structure supports parallel execution across multiple Colab sessions for users processing entire countries.
 
-The notebooks are publicly available at github.com/GvdDool. I welcome feedback and contributions, and I look forward to seeing how others apply these 128-dimensional signatures to their own environmental challenges!
+By structuring the pipeline this way, the workflow transitions from experimental scripts to a production-ready data-processing system.
 
-#EarthObservation #TESSERA #OpenScience #RemoteSensing #MachineLearning #Sustainability
+The notebooks are available at [github.com/GvdDool](https://github.com/GvdDool). I welcome feedback and contributions, and I am excited to see how others use these 128-dimensional signatures for their own environmental projects\!
 
-| Year | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 55 | 60 | 65 | 70 | 75 | 80 | 85 | 90 | 95 | 100 |
-|------|---|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|----|-----|
-| 2020 | 2 | 2 | 4 | 4 | 6 | **8** | 10 | 13 | 20 | 24 | 25 | 34 | 37 | 41 | 44 | 49 | 50 | 55 | 61 | 72 |
-| 2021 | 1 | 1 | 1 | 2 | 6 | **10** | 12 | 17 | 20 | 23 | 25 | 28 | 31 | 34 | 36 | 40 | 42 | 50 | 56 | 66 |
-| 2022 | 1 | 1 | 4 | 4 | **7** | 8 | 11 | 13 | 14 | 17 | 17 | 19 | 21 | 23 | 24 | 28 | 32 | 42 | 52 | 71 |
-| 2023 | 4 | 4 | 4 | **7** | 8 | 8 | 11 | 13 | 16 | 18 | 21 | 25 | 27 | 35 | 38 | 44 | 48 | 53 | 57 | 73 |
-| 2024 | 1 | 3 | 3 | 3 | 3 | **7** | 8 | 9 | 15 | 18 | 20 | 20 | 22 | 28 | 31 | 37 | 38 | 42 | 45 | 68 |
-| 2025 | 0 | 0 | 1 | 2 | 5 | **7** | 9 | 11 | 14 | 15 | 17 | 18 | 25 | 31 | 38 | 40 | 46 | 55 | 62 | 92 |
+\#EarthObservation \#TESSERA \#OpenScience \#RemoteSensing \#MachineLearning \#Sustainability
+
+-----
